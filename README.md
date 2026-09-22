@@ -16,6 +16,32 @@ part of the CLI yet.
 a plain subprocess with separated arguments — no shell is ever involved.
 quietcut itself makes no network calls and has no network-capable dependency.
 
+## Installation
+
+Every [release](https://github.com/umityatarkalkmaz/quietcut-rust/releases)
+carries prebuilt archives plus a `SHA256SUMS` file:
+
+| Archive suffix | Platform |
+|---|---|
+| `x86_64-unknown-linux-musl` | Linux x86_64, statically linked (any distribution) |
+| `aarch64-apple-darwin` | macOS on Apple Silicon |
+| `x86_64-apple-darwin` | macOS on Intel |
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing    # macOS: grep <suffix> SHA256SUMS | shasum -a 256 -c -
+tar -xzf quietcut-<version>-<suffix>.tar.gz
+install -m 755 quietcut-<version>-<suffix>/quietcut ~/.local/bin/
+```
+
+The macOS binaries are not signed. Gatekeeper blocks them after a browser
+download until the quarantine flag is removed:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/quietcut
+```
+
+To build from source instead: `cargo install --locked --path .` (Rust 1.88+).
+
 ## Usage
 
 ```bash
@@ -79,3 +105,19 @@ To confirm offline operation:
 ```bash
 unshare -rn ./target/debug/quietcut analyze recording.mkv
 ```
+
+### Releasing
+
+`.github/workflows/release.yml` publishes a release when a version tag is pushed:
+
+```bash
+# after bumping `version` in Cargo.toml and merging to main
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The workflow runs the full CI on the tagged commit, builds the three archives,
+and publishes them with `SHA256SUMS` and generated release notes. It refuses a
+tag that differs from the `Cargo.toml` version, and a tag with a suffix such as
+`v0.2.0-rc.1` becomes a prerelease. Pull requests that touch the release
+workflow, `Cargo.toml` or `Cargo.lock` run the same builds as a dry run, with
+the archives kept as workflow artifacts instead of being published.

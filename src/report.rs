@@ -44,7 +44,7 @@ pub fn render_analysis(analysis: &Analysis, config: &DetectionConfig) -> String 
     );
 
     let _ = writeln!(out, "\nAudio streams:");
-    out.push_str(&render_stream_table(analysis));
+    out.push_str(&render_stream_table(analysis, config));
 
     let _ = writeln!(out, "\nDetection:");
     let _ = writeln!(
@@ -132,18 +132,18 @@ pub fn render_analysis(analysis: &Analysis, config: &DetectionConfig) -> String 
     out
 }
 
-fn render_stream_table(analysis: &Analysis) -> String {
-    let role_of = |stream: &AudioStream| -> &'static str {
+fn render_stream_table(analysis: &Analysis, config: &DetectionConfig) -> String {
+    let role_of = |stream: &AudioStream| -> String {
         if stream.audio_index == analysis.mic.audio_index {
-            "<- mic"
+            format!("<- mic ({})", config.mic.describe())
         } else if analysis
             .discord
             .as_ref()
             .is_some_and(|discord| discord.audio_index == stream.audio_index)
         {
-            "<- discord"
+            format!("<- discord ({})", config.discord.describe())
         } else {
-            ""
+            String::new()
         }
     };
 

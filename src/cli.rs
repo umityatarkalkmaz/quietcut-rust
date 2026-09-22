@@ -8,8 +8,10 @@ use crate::error::{Error, Result};
 use crate::pipeline::DetectionConfig;
 use crate::streams::StreamSelector;
 
-pub const DEFAULT_MIC_NAME: &str = "Mic";
-pub const DEFAULT_DISCORD_NAME: &str = "Discord";
+/// Audio-relative index of the mic stream: the first audio stream.
+pub const DEFAULT_MIC_STREAM: usize = 0;
+/// Audio-relative index of the Discord stream: the third audio stream.
+pub const DEFAULT_DISCORD_STREAM: usize = 2;
 pub const DEFAULT_MIC_THRESHOLD_DB: f64 = -40.0;
 pub const DEFAULT_DISCORD_THRESHOLD_DB: f64 = -45.0;
 pub const DEFAULT_MIN_SILENCE: f64 = 0.6;
@@ -39,21 +41,21 @@ pub struct DetectionArgs {
     #[arg(value_name = "INPUT")]
     pub input: PathBuf,
 
-    /// Stream title of the mic track, matched case-insensitively.
-    #[arg(long, value_name = "NAME", default_value = DEFAULT_MIC_NAME, conflicts_with = "mic_stream")]
-    pub mic_name: String,
-
-    /// Audio-relative index of the mic track (a:N), bypassing the title match.
+    /// Audio-relative index of the mic stream (a:N) [default: 0, the first audio stream]
     #[arg(long, value_name = "N")]
     pub mic_stream: Option<usize>,
 
-    /// Stream title of the Discord track, matched case-insensitively.
-    #[arg(long, value_name = "NAME", default_value = DEFAULT_DISCORD_NAME, conflicts_with = "discord_stream")]
-    pub discord_name: String,
+    /// Select the mic stream by title instead, ignoring case.
+    #[arg(long, value_name = "NAME", conflicts_with = "mic_stream")]
+    pub mic_name: Option<String>,
 
-    /// Audio-relative index of the Discord track (a:N), bypassing the title match.
+    /// Audio-relative index of the Discord stream (a:N) [default: 2, the third audio stream]
     #[arg(long, value_name = "N")]
     pub discord_stream: Option<usize>,
+
+    /// Select the Discord stream by title instead, ignoring case.
+    #[arg(long, value_name = "NAME", conflicts_with = "discord_stream")]
+    pub discord_name: Option<String>,
 
     /// Silence threshold of the mic track in dBFS (must be negative).
     #[arg(long, value_name = "DB", default_value_t = DEFAULT_MIC_THRESHOLD_DB, allow_negative_numbers = true)]
@@ -89,8 +91,18 @@ impl DetectionArgs {
 
         Ok(DetectionConfig {
             input: self.input.clone(),
-            mic: build_selector(&self.mic_name, self.mic_stream),
-            discord: build_selector(&self.discord_name, self.discord_stream),
+            mic: build_selector(
+                "--mic-name",
+                self.mic_name.as_deref(),
+                self.mic_stream,
+                DEFAULT_MIC_STREAM,
+            )?,
+            discord: build_selector(
+                "--discord-name",
+                self.discord_name.as_deref(),
+                self.discord_stream,
+                DEFAULT_DISCORD_STREAM,
+            )?,
             mic_threshold_db: validate_threshold("--mic-threshold", self.mic_threshold)?,
             discord_threshold_db: validate_threshold(
                 "--discord-threshold",
@@ -102,11 +114,32 @@ impl DetectionArgs {
     }
 }
 
-fn build_selector(name: &str, index: Option<usize>) -> StreamSelector {
-    match index {
-        Some(index) => StreamSelector::ByIndex(index),
-        None => StreamSelector::ByName(name.to_string()),
+/// Picks the selection route: explicit index, then title, then the default.
+fn build_selector(
+    name_flag: &'static str,
+    name: Option<&str>,
+    index: Option<usize>,
+    default_index: usize,
+) -> Result<StreamSelector> {
+    match (index, name) {
+        (Some(index), _) => Ok(StreamSelector::ByIndex(index)),
+        (None, Some(name)) => Ok(StreamSelector::ByName(validate_stream_name(
+            name_flag, name,
+        )?)),
+        (None, None) => Ok(StreamSelector::ByDefaultIndex(default_index)),
     }
+}
+
+/// Rejects titles that could never match a stream.
+fn validate_stream_name(flag: &'static str, name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::InvalidArgument {
+            flag,
+            reason: "must not be empty".to_string(),
+        });
+    }
+    Ok(name.to_string())
 }
 
 /// Accepts finite, strictly negative dBFS thresholds only.
@@ -158,11 +191,8 @@ mod tests {
         let config = detection_args(&[])
             .build_detection_config()
             .expect("defaults must validate");
-        assert_eq!(config.mic, StreamSelector::ByName("Mic".to_string()));
-        assert_eq!(
-            config.discord,
-            StreamSelector::ByName("Discord".to_string())
-        );
+        assert_eq!(config.mic, StreamSelector::ByDefaultIndex(0));
+        assert_eq!(config.discord, StreamSelector::ByDefaultIndex(2));
         assert_eq!(config.mic_threshold_db, -40.0);
         assert_eq!(config.discord_threshold_db, -45.0);
         assert_eq!(config.min_silence, 0.6);
@@ -176,6 +206,62 @@ mod tests {
             .expect("indices must validate");
         assert_eq!(config.mic, StreamSelector::ByIndex(2));
         assert_eq!(config.discord, StreamSelector::ByIndex(0));
+    }
+
+    #[test]
+    fn build_detection_config_selects_by_title_when_named() {
+        let config = detection_args(&["--mic-name", " Mic ", "--discord-name", "Discord"])
+            .build_detection_config()
+            .expect("names must validate");
+        assert_eq!(config.mic, StreamSelector::ByName("Mic".to_string()));
+        assert_eq!(
+            config.discord,
+            StreamSelector::ByName("Discord".to_string())
+        );
+    }
+
+    #[test]
+    fn build_detection_config_mixes_routes_per_role() {
+        let config = detection_args(&["--discord-name", "Discord"])
+            .build_detection_config()
+            .expect("mixed routes must validate");
+        assert_eq!(config.mic, StreamSelector::ByDefaultIndex(0));
+        assert_eq!(
+            config.discord,
+            StreamSelector::ByName("Discord".to_string())
+        );
+    }
+
+    #[test]
+    fn build_detection_config_rejects_empty_stream_name() {
+        let error = detection_args(&["--mic-name", "  "])
+            .build_detection_config()
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::InvalidArgument {
+                flag: "--mic-name",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn help_text_states_the_default_stream_positions() {
+        use clap::CommandFactory;
+
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("analyze")
+            .expect("analyze subcommand must exist")
+            .render_help()
+            .to_string();
+        for default in [DEFAULT_MIC_STREAM, DEFAULT_DISCORD_STREAM] {
+            assert!(
+                help.contains(&format!("[default: {default},")),
+                "help text must state default {default}: {help}"
+            );
+        }
     }
 
     #[test]

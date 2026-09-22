@@ -18,6 +18,9 @@ const FIXTURE_DURATION: f64 = 20.0;
 const FRAME_RATE: f64 = 30.0;
 /// silencedetect reacts a few samples late, and cut points land on frames.
 const TOLERANCE: f64 = 0.1;
+/// When set (CI sets it), a missing ffmpeg fails the tests instead of skipping
+/// them, so the suite can never pass without having run.
+const REQUIRE_FFMPEG_VAR: &str = "QUIETCUT_REQUIRE_FFMPEG";
 
 /// Quiet in (5, 12).
 const MIC_TRACK: &str =
@@ -197,12 +200,21 @@ fn assert_overlap_cut(analysis: &Analysis) {
     assert_close(keep[1].1, FIXTURE_DURATION);
 }
 
+/// Fails when ffmpeg is required, otherwise announces that a test is skipped.
+fn report_missing_ffmpeg() {
+    assert!(
+        std::env::var_os(REQUIRE_FFMPEG_VAR).is_none(),
+        "ffmpeg/ffprobe are not available on PATH, but {REQUIRE_FFMPEG_VAR} is set"
+    );
+    eprintln!("skipping: ffmpeg/ffprobe not available on PATH");
+}
+
 macro_rules! fixture_or_skip {
     ($fixture:expr) => {
         match $fixture {
             Some(path) => path,
             None => {
-                eprintln!("skipping: ffmpeg/ffprobe not available on PATH");
+                report_missing_ffmpeg();
                 return;
             }
         }
@@ -396,6 +408,11 @@ fn analyze_command_prints_a_report() {
 
 #[test]
 fn analyze_command_fails_on_a_missing_input() {
+    // The binary checks for ffmpeg before it looks at the input.
+    if !verify_ffmpeg_available() {
+        report_missing_ffmpeg();
+        return;
+    }
     let output = Command::new(env!("CARGO_BIN_EXE_quietcut"))
         .args(["analyze", "/nonexistent/quietcut-missing.mkv"])
         .output()

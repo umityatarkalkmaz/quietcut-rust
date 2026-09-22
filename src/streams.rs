@@ -1,19 +1,33 @@
 //! Resolution of the mic and Discord audio streams.
 //!
-//! Stream titles come from OBS track names stored in Matroska metadata. OBS
-//! track numbers are never used as indices; every index here is audio relative
-//! (`a:N`).
+//! By default the streams are taken by position (the recording layout is
+//! Mic / Game / Discord). Titles, which come from OBS track names stored in
+//! Matroska metadata, are matched only on request. OBS track numbers are never
+//! used as indices; every index here is audio relative (`a:N`).
 
 use crate::error::{Error, Result};
 use crate::ffprobe::AudioStream;
 
-/// How the user asked for one of the audio streams.
+/// How one of the audio streams is selected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StreamSelector {
     /// Match the stream title, ignoring case.
     ByName(String),
-    /// Take the audio-relative stream index as given.
+    /// Take the audio-relative index the user passed explicitly.
     ByIndex(usize),
+    /// Take the audio-relative index of the default recording layout.
+    ByDefaultIndex(usize),
+}
+
+impl StreamSelector {
+    /// Says how the stream was chosen, for reports.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Self::ByName(_) => "by title",
+            Self::ByIndex(_) => "by index",
+            Self::ByDefaultIndex(_) => "default position",
+        }
+    }
 }
 
 /// A resolved stream plus how many streams the selector matched.
@@ -25,9 +39,10 @@ pub struct StreamMatch<'a> {
 
 /// Resolves one selector.
 ///
-/// An index that does not exist is an error: the user asked for something
-/// concrete that the file cannot provide. A title that does not match returns
-/// `Ok(None)`, because the caller decides whether that stream is optional.
+/// An explicit index that does not exist is an error: the user asked for
+/// something concrete that the file cannot provide. A missing default index or
+/// an unmatched title returns `Ok(None)`, because the caller decides whether
+/// that stream is optional.
 pub fn resolve_stream<'a>(
     streams: &'a [AudioStream],
     selector: &StreamSelector,
@@ -44,6 +59,12 @@ pub fn resolve_stream<'a>(
                     last: streams.len().saturating_sub(1),
                 })?;
             Ok(Some(StreamMatch {
+                stream,
+                match_count: 1,
+            }))
+        }
+        StreamSelector::ByDefaultIndex(index) => {
+            Ok(streams.get(*index).map(|stream| StreamMatch {
                 stream,
                 match_count: 1,
             }))
@@ -182,6 +203,38 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn resolve_stream_accepts_default_index() {
+        let streams = sample_streams();
+        let resolved = resolve_stream(&streams, &StreamSelector::ByDefaultIndex(2), "discord")
+            .expect("resolution must succeed")
+            .expect("default index must resolve");
+        assert_eq!(resolved.stream.title.as_deref(), Some("Discord"));
+    }
+
+    #[test]
+    fn resolve_stream_returns_none_for_missing_default_index() {
+        let streams = build_streams(&[None, None]);
+        assert!(
+            resolve_stream(&streams, &StreamSelector::ByDefaultIndex(2), "discord")
+                .expect("a missing default is not an error")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn describe_names_every_selection_route() {
+        assert_eq!(
+            StreamSelector::ByName("Mic".to_string()).describe(),
+            "by title"
+        );
+        assert_eq!(StreamSelector::ByIndex(1).describe(), "by index");
+        assert_eq!(
+            StreamSelector::ByDefaultIndex(0).describe(),
+            "default position"
+        );
     }
 
     #[test]

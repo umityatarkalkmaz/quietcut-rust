@@ -34,10 +34,13 @@ never modified or re-encoded; Resolve performs the cuts on import.
 
 ## Stream resolution
 
-1. Match by stream title (case-insensitive), configurable names, defaults `Mic` and `Discord`.
-2. Fall back to explicit indices from CLI (`--mic-stream N`, `--discord-stream N`, audio-relative).
-3. Mic not found by either route → error. Do not guess.
-4. Discord not found → continue with mic only and print a warning (Discord is optional).
+1. Default layout: mic is the 1st audio stream (`a:0`), Discord the 3rd (`a:2`).
+2. Per role, explicit selection overrides the default: an audio-relative index
+   (`--mic-stream N`, `--discord-stream N`) or a stream title matched case-insensitively
+   (`--mic-name NAME`, `--discord-name NAME`). Index and title are mutually exclusive.
+3. Mic not found → error. An explicit index the file does not have → error. Do not guess.
+4. Discord not found (title miss, or fewer than 3 audio streams) → continue with mic only
+   and print a warning (Discord is optional).
 5. The game track is **never** used for detection.
 
 ## Silence detection algorithm

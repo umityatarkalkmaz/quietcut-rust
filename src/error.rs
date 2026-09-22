@@ -83,6 +83,16 @@ pub enum Error {
     },
 
     #[error(
+        "the default {role} stream a:{index} does not exist: the file has {count} audio stream(s). \
+         Select one with `--{role}-stream N` or `--{role}-name NAME`"
+    )]
+    DefaultStreamMissing {
+        role: &'static str,
+        index: usize,
+        count: usize,
+    },
+
+    #[error(
         "mic and discord selectors resolve to the same audio stream a:{index}; they must differ"
     )]
     StreamSelectionCollision { index: usize },

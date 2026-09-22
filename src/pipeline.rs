@@ -7,7 +7,7 @@ use crate::ffprobe::{self, AudioStream, MediaInfo};
 use crate::frame::{FrameRate, FrameSegment, snap_intervals_to_frames};
 use crate::interval::{self, Interval};
 use crate::silence;
-use crate::streams::{self, StreamSelector};
+use crate::streams::{self, StreamMatch, StreamSelector};
 
 /// Validated detection settings.
 #[derive(Clone, Debug)]
@@ -47,7 +47,7 @@ pub fn analyze_media(config: &DetectionConfig) -> Result<Analysis> {
         ));
     }
 
-    let mic = resolve_mic_stream(&media, config)?;
+    let mic = resolve_mic_stream(&media, config, &mut warnings)?;
     let discord = resolve_discord_stream(&media, config, &mut warnings)?;
 
     if let Some(discord) = &discord
@@ -134,16 +134,17 @@ pub fn build_keep_segments(
     snap_intervals_to_frames(&keep, frame_rate)
 }
 
-fn resolve_mic_stream(media: &MediaInfo, config: &DetectionConfig) -> Result<AudioStream> {
+fn resolve_mic_stream(
+    media: &MediaInfo,
+    config: &DetectionConfig,
+    warnings: &mut Vec<String>,
+) -> Result<AudioStream> {
     let resolved = streams::resolve_stream(&media.audio_streams, &config.mic, "mic")?;
-    match resolved {
-        Some(found) => Ok(found.stream.clone()),
-        None => Err(Error::StreamNameNotFound {
-            role: "mic",
-            name: selector_name(&config.mic),
-            available: streams::format_available_titles(&media.audio_streams),
-        }),
-    }
+    let Some(found) = resolved else {
+        return Err(build_missing_stream_error("mic", &config.mic, media));
+    };
+    warn_about_ambiguous_title(&found, &config.mic, warnings);
+    Ok(found.stream.clone())
 }
 
 fn resolve_discord_stream(
@@ -154,27 +155,66 @@ fn resolve_discord_stream(
     let resolved = streams::resolve_stream(&media.audio_streams, &config.discord, "discord")?;
     let Some(found) = resolved else {
         warnings.push(format!(
-            "no audio stream titled \"{}\"; detecting on the mic stream only",
-            selector_name(&config.discord)
+            "{}; detecting on the mic stream only",
+            describe_missing_stream("discord", &config.discord, media)
         ));
         return Ok(None);
     };
-
-    if found.match_count > 1 {
-        warnings.push(format!(
-            "{} audio streams are titled \"{}\"; using {}",
-            found.match_count,
-            selector_name(&config.discord),
-            found.stream.label()
-        ));
-    }
+    warn_about_ambiguous_title(&found, &config.discord, warnings);
     Ok(Some(found.stream.clone()))
 }
 
-fn selector_name(selector: &StreamSelector) -> String {
+/// Explains why a required stream could not be resolved.
+fn build_missing_stream_error(
+    role: &'static str,
+    selector: &StreamSelector,
+    media: &MediaInfo,
+) -> Error {
+    let count = media.audio_streams.len();
     match selector {
-        StreamSelector::ByName(name) => name.clone(),
-        StreamSelector::ByIndex(index) => format!("a:{index}"),
+        StreamSelector::ByName(name) => Error::StreamNameNotFound {
+            role,
+            name: name.clone(),
+            available: streams::format_available_titles(&media.audio_streams),
+        },
+        StreamSelector::ByIndex(index) => Error::StreamIndexOutOfRange {
+            role,
+            index: *index,
+            count,
+            last: count.saturating_sub(1),
+        },
+        StreamSelector::ByDefaultIndex(index) => Error::DefaultStreamMissing {
+            role,
+            index: *index,
+            count,
+        },
+    }
+}
+
+/// Explains why an optional stream could not be resolved.
+fn describe_missing_stream(role: &str, selector: &StreamSelector, media: &MediaInfo) -> String {
+    match selector {
+        StreamSelector::ByName(name) => format!("no audio stream titled \"{name}\""),
+        StreamSelector::ByIndex(index) | StreamSelector::ByDefaultIndex(index) => format!(
+            "no {role} stream at a:{index} (the file has {} audio stream(s))",
+            media.audio_streams.len()
+        ),
+    }
+}
+
+fn warn_about_ambiguous_title(
+    found: &StreamMatch<'_>,
+    selector: &StreamSelector,
+    warnings: &mut Vec<String>,
+) {
+    if found.match_count > 1
+        && let StreamSelector::ByName(name) = selector
+    {
+        warnings.push(format!(
+            "{} audio streams are titled \"{name}\"; using {}",
+            found.match_count,
+            found.stream.label()
+        ));
     }
 }
 
@@ -226,6 +266,135 @@ mod tests {
             .map(|segment| (segment.start_frame, segment.end_frame))
             .collect();
         assert_eq!(frames, [(0, 129), (196, 500)]);
+    }
+
+    fn build_media(titles: &[Option<&str>]) -> MediaInfo {
+        MediaInfo {
+            path: PathBuf::from("/tmp/sample.mkv"),
+            duration: 20.0,
+            frame_rate: FrameRate::new(30, 1).expect("valid frame rate"),
+            video_stream_count: 1,
+            audio_streams: titles
+                .iter()
+                .enumerate()
+                .map(|(audio_index, title)| AudioStream {
+                    audio_index,
+                    file_index: audio_index + 1,
+                    title: title.map(str::to_string),
+                    codec: Some("aac".to_string()),
+                    channels: Some(2),
+                })
+                .collect(),
+        }
+    }
+
+    fn build_config(mic: StreamSelector, discord: StreamSelector) -> DetectionConfig {
+        DetectionConfig {
+            input: PathBuf::from("/tmp/sample.mkv"),
+            mic,
+            discord,
+            mic_threshold_db: -40.0,
+            discord_threshold_db: -45.0,
+            min_silence: 0.6,
+            padding: 0.15,
+        }
+    }
+
+    fn default_config() -> DetectionConfig {
+        build_config(
+            StreamSelector::ByDefaultIndex(0),
+            StreamSelector::ByDefaultIndex(2),
+        )
+    }
+
+    #[test]
+    fn resolve_streams_uses_the_default_layout_without_titles() {
+        let media = build_media(&[None, None, None]);
+        let mut warnings = Vec::new();
+        let mic = resolve_mic_stream(&media, &default_config(), &mut warnings).expect("mic");
+        let discord = resolve_discord_stream(&media, &default_config(), &mut warnings)
+            .expect("resolution must succeed")
+            .expect("discord must resolve");
+        assert_eq!((mic.audio_index, discord.audio_index), (0, 2));
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn resolve_discord_stream_warns_when_the_default_is_missing() {
+        let media = build_media(&[Some("Mic"), Some("Game")]);
+        let mut warnings = Vec::new();
+        let discord = resolve_discord_stream(&media, &default_config(), &mut warnings)
+            .expect("a missing default discord stream is not an error");
+        assert!(discord.is_none());
+        assert_eq!(
+            warnings,
+            [
+                "no discord stream at a:2 (the file has 2 audio stream(s)); \
+              detecting on the mic stream only"
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_discord_stream_rejects_a_missing_explicit_index() {
+        let media = build_media(&[None, None]);
+        let config = build_config(
+            StreamSelector::ByDefaultIndex(0),
+            StreamSelector::ByIndex(2),
+        );
+        let error = resolve_discord_stream(&media, &config, &mut Vec::new()).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::StreamIndexOutOfRange { index: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn resolve_mic_stream_rejects_a_missing_default_index() {
+        let media = build_media(&[None]);
+        let config = build_config(
+            StreamSelector::ByDefaultIndex(1),
+            StreamSelector::ByDefaultIndex(2),
+        );
+        let error = resolve_mic_stream(&media, &config, &mut Vec::new()).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::DefaultStreamMissing {
+                role: "mic",
+                index: 1,
+                count: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn resolve_mic_stream_rejects_an_unknown_title() {
+        let media = build_media(&[Some("Mic")]);
+        let config = build_config(
+            StreamSelector::ByName("Microphone".to_string()),
+            StreamSelector::ByDefaultIndex(2),
+        );
+        let error = resolve_mic_stream(&media, &config, &mut Vec::new()).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::StreamNameNotFound { role: "mic", .. }
+        ));
+    }
+
+    #[test]
+    fn resolve_mic_stream_warns_about_ambiguous_titles() {
+        let media = build_media(&[Some("Mic"), Some("mic")]);
+        let config = build_config(
+            StreamSelector::ByName("MIC".to_string()),
+            StreamSelector::ByDefaultIndex(2),
+        );
+        let mut warnings = Vec::new();
+        let mic = resolve_mic_stream(&media, &config, &mut warnings).expect("mic");
+        assert_eq!(mic.audio_index, 0);
+        assert_eq!(
+            warnings,
+            ["2 audio streams are titled \"MIC\"; using a:0 \"Mic\""]
+        );
     }
 
     #[test]

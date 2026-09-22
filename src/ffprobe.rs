@@ -183,11 +183,28 @@ fn select_duration(probe: &ProbeOutput) -> Option<f64> {
 }
 
 /// Reads a tag by name, ignoring case (Matroska writers disagree on casing).
+///
+/// Tag values are untrusted file content that ends up on the terminal and, via
+/// the exporters, in XML. Control characters are replaced so a crafted file
+/// can neither inject terminal escape sequences nor produce invalid XML.
 fn fetch_tag(tags: &BTreeMap<String, String>, name: &str) -> Option<String> {
     tags.iter()
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.trim().to_string())
+        .map(|(_, value)| sanitize_text(value.trim()))
         .filter(|value| !value.is_empty())
+}
+
+/// Replaces every control character with U+FFFD, keeping tampering visible.
+fn sanitize_text(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() {
+                char::REPLACEMENT_CHARACTER
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 fn parse_seconds(text: &str) -> Option<f64> {
@@ -320,6 +337,22 @@ mod tests {
             parse_sample("not json"),
             Err(Error::ProbeDecode { .. })
         ));
+    }
+
+    #[test]
+    fn parse_probe_output_neutralises_control_characters_in_titles() {
+        // OSC "set window title", BEL, CSI "erase line" and a C1 CSI byte.
+        let json = SAMPLE.replace(
+            r#""title": "Mic""#,
+            r#""title": "Mic\u001b]0;pwned\u0007\u001b[2K\u009b31mX""#,
+        );
+        let media = parse_sample(&json).expect("sample must parse");
+        let title = media.audio_streams[0].title.as_deref().expect("title");
+        assert!(
+            !title.chars().any(char::is_control),
+            "title still carries control characters: {title:?}"
+        );
+        assert_eq!(title, "Mic\u{fffd}]0;pwned\u{fffd}\u{fffd}[2K\u{fffd}31mX");
     }
 
     #[test]

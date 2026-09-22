@@ -169,14 +169,15 @@ fn render_stream_table(analysis: &Analysis, config: &DetectionConfig) -> String 
         })
         .collect();
 
+    // `{:<width$}` pads by characters, so measure characters rather than bytes.
     let title_width = rows
         .iter()
-        .map(|(_, title, _)| title.len())
+        .map(|(_, title, _)| title.chars().count())
         .max()
         .unwrap_or(0);
     let codec_width = rows
         .iter()
-        .map(|(_, _, codec)| codec.len())
+        .map(|(_, _, codec)| codec.chars().count())
         .max()
         .unwrap_or(0);
 
@@ -205,7 +206,72 @@ pub fn format_interval_summary(intervals: &[Interval]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::ffprobe::MediaInfo;
+    use crate::frame::FrameRate;
+    use crate::streams::StreamSelector;
+
+    fn build_analysis(titles: &[&str]) -> (Analysis, DetectionConfig) {
+        let audio_streams: Vec<AudioStream> = titles
+            .iter()
+            .enumerate()
+            .map(|(audio_index, title)| AudioStream {
+                audio_index,
+                file_index: audio_index + 1,
+                title: Some((*title).to_string()),
+                codec: Some("flac".to_string()),
+                channels: Some(1),
+            })
+            .collect();
+        let analysis = Analysis {
+            media: MediaInfo {
+                path: PathBuf::from("/tmp/sample.mkv"),
+                duration: 20.0,
+                frame_rate: FrameRate::new(30, 1).expect("valid frame rate"),
+                video_stream_count: 1,
+                audio_streams: audio_streams.clone(),
+            },
+            mic: audio_streams[0].clone(),
+            discord: None,
+            mic_silences: Vec::new(),
+            discord_silences: None,
+            silences: Vec::new(),
+            keep_segments: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let config = DetectionConfig {
+            input: PathBuf::from("/tmp/sample.mkv"),
+            mic: StreamSelector::ByDefaultIndex(0),
+            discord: StreamSelector::ByDefaultIndex(2),
+            mic_threshold_db: -40.0,
+            discord_threshold_db: -45.0,
+            min_silence: 0.6,
+            padding: 0.15,
+        };
+        (analysis, config)
+    }
+
+    #[test]
+    fn render_stream_table_pads_titles_by_characters() {
+        let (analysis, config) = build_analysis(&["Mic", "Müzik Çalar"]);
+        let table = render_stream_table(&analysis, &config);
+        // The longest title is followed by the two-space column gap only, and
+        // shorter titles are padded to the same character width.
+        assert!(table.contains("\"Müzik Çalar\"  flac"), "{table}");
+        assert!(
+            table.contains(&format!("\"Mic\"{}flac", " ".repeat(10))),
+            "{table}"
+        );
+    }
+
+    #[test]
+    fn render_stream_table_marks_how_each_role_was_chosen() {
+        let (analysis, config) = build_analysis(&["Mic", "Game"]);
+        let table = render_stream_table(&analysis, &config);
+        assert!(table.contains("<- mic (default position)"), "{table}");
+    }
 
     #[test]
     fn format_timecode_renders_hours_minutes_seconds() {

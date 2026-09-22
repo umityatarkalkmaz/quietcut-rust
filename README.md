@@ -65,8 +65,16 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-The integration tests build a synthetic three-track MKV with ffmpeg and skip
-with a message when ffmpeg is unavailable. To confirm offline operation:
+The integration tests build synthetic MKVs with ffmpeg and skip with a message
+when ffmpeg is unavailable. With `QUIETCUT_REQUIRE_FFMPEG` set they fail instead,
+so a run can never pass without having exercised ffmpeg.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on
+pushes to `main`: build and test on Linux and macOS with the latest stable Rust,
+build and test on Linux with the minimum supported Rust (1.88), plus a format
+and clippy job. The test jobs install ffmpeg and set `QUIETCUT_REQUIRE_FFMPEG`.
+
+To confirm offline operation:
 
 ```bash
 unshare -rn ./target/debug/quietcut analyze recording.mkv

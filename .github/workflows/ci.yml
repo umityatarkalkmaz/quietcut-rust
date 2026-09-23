@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Lets the release workflow run the full CI on a tag before building.
+  workflow_call:
 
 permissions:
   contents: read

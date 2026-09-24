@@ -1,11 +1,10 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # Pushes to main run this workflow through release.yml, which calls it
+  # before release-please, so main is not tested twice.
   pull_request:
   workflow_dispatch:
-  # Lets the release workflow run the full CI on a tag before building.
   workflow_call:
 
 permissions:

@@ -95,10 +95,11 @@ The integration tests build synthetic MKVs with ffmpeg and skip with a message
 when ffmpeg is unavailable. With `QUIETCUT_REQUIRE_FFMPEG` set they fail instead,
 so a run can never pass without having exercised ffmpeg.
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on
-pushes to `main`: build and test on Linux and macOS with the latest stable Rust,
-build and test on Linux with the minimum supported Rust (1.88), plus a format
-and clippy job. The test jobs install ffmpeg and set `QUIETCUT_REQUIRE_FFMPEG`.
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request, and on
+`main` as the first stage of the release workflow: build and test on Linux and
+macOS with the latest stable Rust, build and test on Linux with the minimum
+supported Rust (1.88), plus a format and clippy job. The test jobs install
+ffmpeg and set `QUIETCUT_REQUIRE_FFMPEG`.
 
 To confirm offline operation:
 
@@ -108,19 +109,34 @@ unshare -rn ./target/debug/quietcut analyze recording.mkv
 
 ### Releasing
 
-`.github/workflows/release.yml` publishes a release when a version tag is pushed:
+Releases are cut by [release-please](https://github.com/googleapis/release-please)
+from [Conventional Commits](https://www.conventionalcommits.org/). Pull requests
+are squash-merged, so each pull request title becomes one commit on `main` and
+one line in `CHANGELOG.md`. The *PR title* check enforces the format.
 
-```bash
-# after bumping `version` in Cargo.toml and merging to main
-git tag v0.2.0 && git push origin v0.2.0
-```
+| Title | Effect |
+|---|---|
+| `feat: …` | minor release (0.1.0 → 0.2.0) |
+| `fix: …`, `perf: …` | patch release (0.1.0 → 0.1.1) |
+| `feat!: …` or a `BREAKING CHANGE:` footer | minor release before 1.0, major after |
+| `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `style:`, `build:` | no release |
 
-The workflow runs the full CI on the tagged commit, builds the three archives,
-and publishes them with `SHA256SUMS` and generated release notes. It refuses a
-tag that differs from the `Cargo.toml` version, and a tag with a suffix such as
-`v0.2.0-rc.1` becomes a prerelease. Pull requests that touch the release
-workflow, `Cargo.toml` or `Cargo.lock` run the same builds as a dry run, with
-the archives kept as workflow artifacts instead of being published.
+Every push to `main` runs the full CI first. Once it passes, release-please opens
+or updates a release pull request (`chore(main): release X.Y.Z`) that bumps the
+version in `Cargo.toml` and `Cargo.lock` and extends `CHANGELOG.md`. Nothing is
+published until that pull request is merged: the merge creates the tag and the
+GitHub release, and the workflow attaches the three archives and `SHA256SUMS`.
+
+One-time repository settings:
+
+- *Settings → Actions → General*: allow GitHub Actions to create and approve pull requests.
+- *Settings → General → Pull Requests*: allow squash merging with the pull request title
+  as the default commit message.
+
+Release pull requests are opened with the workflow token, so GitHub runs no
+checks on them; their commit is tested on `main` before the release is created.
+Pull requests that touch the release setup, `Cargo.toml` or `Cargo.lock` run the
+three builds as a dry run, keeping the archives as workflow artifacts.
 
 ## License
 

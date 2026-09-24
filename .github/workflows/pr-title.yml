@@ -1,0 +1,30 @@
+name: PR title
+
+# Pull requests are squash-merged, so the title becomes the commit on main that
+# release-please reads. A malformed title would silently skip a release.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  conventional-commits:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the title
+        env:
+          # Untrusted input: only ever read through this variable.
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([[:alnum:]._/-]+\))?!?: [^[:space:]].*$'
+          if [[ "$TITLE" =~ $pattern ]]; then
+            echo "The title follows Conventional Commits."
+            exit 0
+          fi
+          # Prefixed so a title can never start a line with a workflow command.
+          printf 'Title: %s\n' "$TITLE"
+          echo "::error title=PR title::Use Conventional Commits, e.g. 'feat: add FCPXML export' or 'docs(readme): fix a typo'. Types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test."
+          exit 1

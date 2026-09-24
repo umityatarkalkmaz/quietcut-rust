@@ -26,6 +26,11 @@
 - Never hardcode absolute home directory paths — derive them from `$HOME`
 - Verify tool availability with `command -v <tool>` before relying on it
 
+### Git
+- Commit messages and pull request titles follow Conventional Commits 1.0.0: `type(scope)!: description`, with the types `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `style`, `revert`
+- Choose the type by user impact: only `feat`, `fix`, `perf` and breaking changes (`!` or a `BREAKING CHANGE:` footer) produce a release, so documentation, comment, test and tooling changes never use them
+- Pull requests are squash-merged, so the pull request title is the line that lands in the changelog
+
 ## Output Language
 
 ### Everything outside string literals: English

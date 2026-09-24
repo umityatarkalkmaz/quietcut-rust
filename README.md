@@ -121,3 +121,7 @@ tag that differs from the `Cargo.toml` version, and a tag with a suffix such as
 `v0.2.0-rc.1` becomes a prerelease. Pull requests that touch the release
 workflow, `Cargo.toml` or `Cargo.lock` run the same builds as a dry run, with
 the archives kept as workflow artifacts instead of being published.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Release archives include the license text.

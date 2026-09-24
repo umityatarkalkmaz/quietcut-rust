@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Detect silent sections in OBS multi-track recordings and export a cut timeline"
+license = "MIT"
 publish = false
 
 [dependencies]
